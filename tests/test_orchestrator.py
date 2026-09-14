@@ -1246,3 +1246,36 @@ async def test_a_quiet_run_tells_the_board_nothing(orch, repo, monkeypatch):
     ))
     await orch._review(repo, pr(), KEY, REQ)
     assert told == [], "--no-publish posts nothing anywhere, the board included"
+
+
+async def test_the_heartbeat_carries_the_panel_summary(orch, monkeypatch):
+    """One payload per tick: what the 4020 panel would say, for the board's card."""
+    beats = []
+
+    async def fake_heartbeat(url, payload):
+        beats.append(payload)
+
+    monkeypatch.setattr(orch_mod.props_bridge, "heartbeat", fake_heartbeat)
+    orch.cfg.props_url = "http://host.docker.internal:4021"
+    _approved(orch.db)
+    orch.db.record_spend(repo="acme/app", pr=9, kind="failed", cost_usd=0.3, duration_s=5)
+    await orch._heartbeat()
+    (beat,) = beats
+    assert beat["today"] == {"ok": 1}
+    assert beat["failed_today"] == 1
+    assert beat["ready"] == [7]
+    assert beat["reviewing"] == []
+    assert "allowed" in beat["budget"] and beat["tick_s"] == orch.cfg.poll_interval_s
+
+
+async def test_a_quiet_run_sends_no_heartbeat(orch, monkeypatch):
+    beats = []
+
+    async def fake_heartbeat(url, payload):
+        beats.append(payload)
+
+    monkeypatch.setattr(orch_mod.props_bridge, "heartbeat", fake_heartbeat)
+    orch.cfg.props_url = "http://host.docker.internal:4021"
+    orch.no_publish = True
+    await orch._heartbeat()
+    assert beats == []

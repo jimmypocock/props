@@ -28,7 +28,7 @@ from robbie.anchor import parse_findings, severity_count, summary_findings
 from robbie.ci_watch import CiWatch
 from robbie.config import Choice, Config, RepoConfig, Secrets
 from robbie.contract import Blocks, preamble, threads_block
-from robbie.db import Db
+from robbie.db import Db, now_ms
 from robbie.gates import Decision, already_judged, dedup_key, done_label, evaluate, label_hold
 from robbie.github import (
     QUEUE_LIMIT,
@@ -165,7 +165,30 @@ class Orchestrator:
                 await self._retire_unlabeled(repo)
                 for pr in prs:
                     jobs.append(tg.create_task(self._handle(repo, pr)))
-        return answered + [job.result() for job in jobs]
+        outcomes = answered + [job.result() for job in jobs]
+        await self._heartbeat()
+        return outcomes
+
+    async def _heartbeat(self) -> None:
+        """The board's one-glance reviewer card: what the panel would say, pushed
+        once per tick over the bridge. Best-effort like every bridge call; quiet
+        runs say nothing anywhere, the board included."""
+        if self._quiet or not self.cfg.props_url:
+            return
+        midnight = budget.midnight_ms()
+        gate = self._meter()
+        await props_bridge.heartbeat(self.cfg.props_url, {
+            "at": now_ms(),
+            "tick_s": self.cfg.poll_interval_s,
+            "reviewing": [int(r["pr"]) for r in self.db.unfinished(10)
+                          if r["state"] == "running"],
+            "today": self.db.verdicts_since(midnight),
+            "failed_today": self.db.failed_runs_since(midnight),
+            "spend_usd": round(self.db.spend_since(midnight, self.cfg.endpoint_models), 2),
+            "budget": {"allowed": gate.allowed, "detail": gate.detail},
+            "ready": [int(r["pr"]) for r in self.db.approved_and_green(
+                midnight - 30 * 86_400_000) if r["ci_state"] == "green"],
+        })
 
     async def review_one(self, slug: str, pr: int) -> Outcome:
         """Force a review, ignoring the queue, the gates and prior state."""

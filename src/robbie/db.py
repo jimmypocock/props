@@ -508,6 +508,24 @@ class Db:
             (repo, pr, kind, cost_usd, duration_s, now_ms()),
         )
 
+    def verdicts_since(self, since_ms: int) -> dict[str, int]:
+        """Published verdicts since `since_ms`, by verdict — the heartbeat's tally."""
+        return {
+            str(r["verdict"]): int(r["n"]) for r in self.conn.execute(
+                "SELECT verdict, COUNT(*) AS n FROM reviews WHERE state='published' "
+                "AND finished_at >= ? GROUP BY verdict",
+                (since_ms,),
+            )
+        }
+
+    def failed_runs_since(self, since_ms: int) -> int:
+        """Failed containers since `since_ms` — from append-only spend, because a
+        retry's INSERT OR REPLACE erases the failed review row it recovers."""
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM spend WHERE kind='failed' AND created_at >= ?",
+            (since_ms,),
+        ).fetchone()[0])
+
     def spend_since(self, since_ms: int, exclude_models: tuple[str, ...] = ()) -> float:
         """Dollars the account was billed since `since_ms`.
 

@@ -36,3 +36,20 @@ async def report(url: str, pr: int, head: str, status: str) -> None:
         await asyncio.to_thread(_post)
     except Exception as ex:  # noqa: BLE001 — freshness lost, nothing else
         logger.debug("props bridge: #%s %s not reported: %s", pr, status, ex)
+
+
+async def heartbeat(url: str, payload: dict) -> None:
+    """The panel's one-glance summary, pushed once per tick. Same contract as
+    `report`: best-effort, a dead tunnel costs freshness and nothing else."""
+    if not url:
+        return
+
+    def _post() -> None:
+        httpx.post(
+            f"{url.rstrip('/')}/api/reviewer/heartbeat", json=payload, timeout=5
+        ).raise_for_status()
+
+    try:
+        await asyncio.to_thread(_post)
+    except Exception as ex:  # noqa: BLE001 — freshness lost, nothing else
+        logger.debug("props bridge: heartbeat not delivered: %s", ex)
