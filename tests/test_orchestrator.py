@@ -1264,6 +1264,9 @@ async def test_the_heartbeat_carries_the_panel_summary(orch, monkeypatch):
     await orch._heartbeat()
     (beat,) = beats
     assert beat["today"] == {"ok": 1}
+    assert [r["pr"] for r in beat["reviews"]] == [7]
+    assert beat["reviews"][0]["verdict"] == "ok"
+    assert beat["failures"] == [], "spend-only failures are recovered, not open"
     assert beat["failed_today"] == 1
     assert beat["ready"] == [7]
     assert beat["reviewing"] == []

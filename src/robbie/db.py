@@ -518,6 +518,34 @@ class Db:
             )
         }
 
+    def published_since(self, since_ms: int, limit: int = 40) -> list[dict]:
+        """Today's verdicts, newest first — the heartbeat's expandable detail."""
+        return [
+            {"pr": int(r["pr"]), "verdict": r["verdict"], "inline": r["inline"],
+             "at": int(r["finished_at"] or 0)}
+            for r in self.conn.execute(
+                "SELECT pr, verdict, inline, finished_at FROM reviews "
+                "WHERE state='published' AND finished_at >= ? "
+                "ORDER BY finished_at DESC LIMIT ?",
+                (since_ms, limit),
+            )
+        ]
+
+    def failing_now(self, since_ms: int, limit: int = 20) -> list[dict]:
+        """Rows still in state=failed from today, with their reason. A retry that
+        succeeded REPLACES its failed row, so these are the outages still open —
+        recovered failures live only in append-only spend."""
+        return [
+            {"pr": int(r["pr"]), "reason": (r["hold_reason"] or "")[:160],
+             "at": int(r["created_at"])}
+            for r in self.conn.execute(
+                "SELECT pr, hold_reason, created_at FROM reviews "
+                "WHERE state='failed' AND created_at >= ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (since_ms, limit),
+            )
+        ]
+
     def failed_runs_since(self, since_ms: int) -> int:
         """Failed containers since `since_ms` — from append-only spend, because a
         retry's INSERT OR REPLACE erases the failed review row it recovers."""

@@ -222,6 +222,8 @@ class Orchestrator:
                           if r["state"] == "running"],
             "today": self.db.verdicts_since(midnight),
             "failed_today": self.db.failed_runs_since(midnight),
+            "reviews": self.db.published_since(midnight),
+            "failures": self.db.failing_now(midnight),
             "spend_usd": round(self.db.spend_since(midnight, self.cfg.endpoint_models), 2),
             "budget": {"allowed": gate.allowed, "detail": gate.detail},
             "ready": [int(r["pr"]) for r in self.db.approved_and_green(
