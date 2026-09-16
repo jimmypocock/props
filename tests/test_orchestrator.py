@@ -1279,3 +1279,58 @@ async def test_a_quiet_run_sends_no_heartbeat(orch, monkeypatch):
     orch.no_publish = True
     await orch._heartbeat()
     assert beats == []
+
+
+# ----- the credentials gate ----------------------------------------------
+
+
+def _creds_file(orch, tmp_path, expires_in_min: float):
+    import json as _json
+    import time as _time
+
+    f = tmp_path / "creds.json"
+    f.write_text(_json.dumps({"claudeAiOauth": {
+        "accessToken": "t",
+        "expiresAt": (_time.time() + expires_in_min * 60) * 1000,
+    }}))
+    orch.cfg.backend = "oauth"  # the gate only applies to the oauth backend
+    orch.secrets = orch.secrets.model_copy(update={"claude_credentials": f})
+    return f
+
+
+async def test_an_expired_token_pauses_containers_and_dms_once(
+    orch, cfg, tmp_path, monkeypatch
+):
+    """Seven DMs in an hour for one stale token (2026-09-15). While the proxy
+    would refuse every model call, a tick spawns nothing and the operator hears
+    about the outage exactly once."""
+    _creds_file(orch, tmp_path, expires_in_min=-30)
+    stale_ms, exp = orch._creds_expired()
+    assert stale_ms > 0 and exp > 0
+
+    await orch._dm_owner_once(f"creds-expired:{exp}", "paused")
+    await orch._dm_owner_once(f"creds-expired:{exp}", "paused")
+    assert orch.slack.owner == ["paused"], "same token, one DM"
+
+    # a refreshed token mints a new expiresAt: the gate opens and a future
+    # outage gets its own single announcement
+    _creds_file(orch, tmp_path, expires_in_min=60)
+    assert orch._creds_expired() == (0, 0)
+
+
+async def test_a_fresh_token_leaves_the_tick_alone(orch, tmp_path):
+    _creds_file(orch, tmp_path, expires_in_min=120)
+    assert orch._creds_expired() == (0, 0)
+
+
+async def test_the_heartbeat_names_the_pause(orch, tmp_path, monkeypatch):
+    beats = []
+
+    async def fake_heartbeat(url, payload):
+        beats.append(payload)
+
+    monkeypatch.setattr(orch_mod.props_bridge, "heartbeat", fake_heartbeat)
+    orch.cfg.props_url = "http://host.docker.internal:4021"
+    _creds_file(orch, tmp_path, expires_in_min=-30)
+    await orch._heartbeat()
+    assert "credentials expired" in beats[0]["paused"]

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any, NamedTuple
@@ -129,6 +130,23 @@ class Orchestrator:
             return {"state": "failed", "hold_reason": "--no-publish: nothing was posted"}
         return {"state": state, "hold_reason": reason}
 
+    def _creds_expired(self) -> tuple[int, int]:
+        """(ms past expiry, expiresAt) for the mounted account token — (0, 0) when
+        fresh or not applicable. While past expiry, the proxy refuses every model
+        call, so a container spawned now is a guaranteed failure and a guaranteed
+        operator DM per tick (2026-09-15: seven DMs in an hour for one stale
+        token). An unreadable file is the startup check's complaint, not ours.
+        """
+        if self.cfg.backend != "oauth" or self.secrets.claude_credentials is None:
+            return 0, 0
+        try:
+            creds = json.loads(self.secrets.claude_credentials.read_text())
+            exp = int(float(creds["claudeAiOauth"].get("expiresAt", 0)))
+        except Exception:  # noqa: BLE001
+            return 0, 0
+        over = now_ms() - exp
+        return (over, exp) if over > 0 else (0, 0)
+
     # ----- entry points --------------------------------------------------
 
     async def poll_once(self) -> list[Outcome]:
@@ -141,8 +159,23 @@ class Orchestrator:
         self._threads.clear()
         if not self.dry_run:  # housekeeping, so it belongs to a real tick only
             prune_transcripts(self.cfg)
+        stale_ms, token_exp = self._creds_expired()
+        if stale_ms:
+            # one DM per token, not per tick: a refresh mints a new expiresAt,
+            # so the next outage announces itself exactly once too
+            await self._dm_owner_once(
+                f"creds-expired:{token_exp}",
+                f"The account's access token expired {stale_ms // 60_000} min ago, so "
+                "reviews are paused — every container would fail until it refreshes. "
+                "Run any Claude session on the host (creds-sync carries it over within "
+                "minutes); I'll start again on my own.",
+            )
+            logger.warning(
+                "credentials expired %d min ago — skipping containers this tick",
+                stale_ms // 60_000,
+            )
         answered: list[Outcome] = []
-        if self._meter().allowed:
+        if not stale_ms and self._meter().allowed:
             answered = await self.answer_threads()  # a container, so the same spend gate
         answered += await self.ci.watch()  # gh reads only, so no gate of its own
         jobs: list[asyncio.Task[Outcome]] = []
@@ -163,6 +196,8 @@ class Orchestrator:
                     continue
 
                 await self._retire_unlabeled(repo)
+                if stale_ms:
+                    continue  # board bookkeeping done; no containers until creds refresh
                 for pr in prs:
                     jobs.append(tg.create_task(self._handle(repo, pr)))
         outcomes = answered + [job.result() for job in jobs]
@@ -177,8 +212,11 @@ class Orchestrator:
             return
         midnight = budget.midnight_ms()
         gate = self._meter()
+        stale_ms, _ = self._creds_expired()
         await props_bridge.heartbeat(self.cfg.props_url, {
             "at": now_ms(),
+            "paused": (f"credentials expired {stale_ms // 60_000}m ago"
+                       if stale_ms else None),
             "tick_s": self.cfg.poll_interval_s,
             "reviewing": [int(r["pr"]) for r in self.db.unfinished(10)
                           if r["state"] == "running"],
