@@ -1213,8 +1213,8 @@ async def test_the_red_build_note_goes_out_once_per_commit(orch, repo, monkeypat
 def _told(monkeypatch):
     told = []
 
-    async def fake_report(url, pr_num, head, status):
-        told.append(status)
+    async def fake_report(url, pr_num, head, status, verdict=None):
+        told.append((status, verdict))
 
     monkeypatch.setattr(orch_mod.props_bridge, "report", fake_report)
     return told
@@ -1227,14 +1227,16 @@ async def test_the_board_hears_the_review_lifecycle(orch, repo, monkeypatch):
         "needs-work", inline='[{"path":"a.rb","line":1,"severity":"Must-fix"}]'
     ))
     await orch._review(repo, pr(), KEY, REQ)
-    assert told == ["reviewing", "posted"]
+    assert told == [("reviewing", None), ("posted", "needs-work")], (
+        "the verdict rides along so the board can tell an ok from a needs-work"
+    )
 
 
 async def test_a_failed_run_tells_the_board_skipped(orch, repo, monkeypatch):
     told = _told(monkeypatch)
     stub_run(monkeypatch, ReviewRun(ok=False, error="container exited 1", duration_s=3.0))
     await orch._review(repo, pr(), KEY, REQ)
-    assert told == ["reviewing", "skipped"]
+    assert told == [("reviewing", None), ("skipped", None)]
 
 
 async def test_a_quiet_run_tells_the_board_nothing(orch, repo, monkeypatch):

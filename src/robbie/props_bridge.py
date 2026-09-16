@@ -19,17 +19,24 @@ logger = logging.getLogger(__name__)
 STATUSES = ("requested", "queued", "reviewing", "drafted", "posted", "skipped", "clear")
 
 
-async def report(url: str, pr: int, head: str, status: str) -> None:
-    """One lifecycle event to the board. No URL configured means no bridge."""
+async def report(
+    url: str, pr: int, head: str, status: str, verdict: str | None = None
+) -> None:
+    """One lifecycle event to the board. No URL configured means no bridge.
+
+    `verdict` rides along on `posted` so the board can tell an approval from a
+    needs-work — "robbie ok'd this at the current head" is the operator's
+    look-at-next list."""
     if not url:
         return
     assert status in STATUSES, status  # a caller bug, not a runtime condition
 
     def _post() -> None:
+        body: dict = {"pr": pr, "head": head, "status": status}
+        if verdict:
+            body["verdict"] = verdict
         httpx.post(
-            f"{url.rstrip('/')}/api/reviewer",
-            json={"pr": pr, "head": head, "status": status},
-            timeout=5,
+            f"{url.rstrip('/')}/api/reviewer", json=body, timeout=5
         ).raise_for_status()
 
     try:

@@ -567,7 +567,7 @@ class Orchestrator:
                 **common,
             )
             await self._announce_approval(meta, ci)
-            await self._tell_props(meta, "posted")
+            await self._tell_props(meta, "posted", "ok")
             return Outcome(repo.slug, meta.number, "review", f"ok — {ci}")
 
         # recorded as judged either way: retrying a permanent publish failure
@@ -606,7 +606,7 @@ class Orchestrator:
                 inline=result.inline, **common,
             )
             await self._notify(repo, meta, verdict, findings)
-            await self._tell_props(meta, "posted")
+            await self._tell_props(meta, "posted", verdict)
         return Outcome(repo.slug, meta.number, "review", f"{verdict}: {result.detail}")
 
     async def _gave_up(
@@ -620,12 +620,14 @@ class Orchestrator:
         await self._tell_props(meta, "skipped")
         return Outcome(repo.slug, meta.number, "failed", detail)
 
-    async def _tell_props(self, meta: PrMeta, status: str) -> None:
+    async def _tell_props(
+        self, meta: PrMeta, status: str, verdict: str | None = None
+    ) -> None:
         """The board hears where this head is in its life. Quiet runs report
         nothing, like everything else they touch."""
         if not self._quiet:
             await props_bridge.report(
-                self.cfg.props_url, meta.number, meta.head_sha, status
+                self.cfg.props_url, meta.number, meta.head_sha, status, verdict
             )
 
     async def _prior_threads(self, repo: RepoConfig, meta: PrMeta) -> list[Thread]:
